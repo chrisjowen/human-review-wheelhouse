@@ -1,0 +1,31 @@
+{
+	"$schema": "https://raw.githubusercontent.com/chrisjowen/wheelhouse/main/packages/plugin-sdk/plugin.schema.json",
+	"name": "human-review",
+	"displayName": "Human Review",
+	"version": "0.1.0",
+	"description": "Edit and comment on any live preview, or a task's HTML or Markdown page, directly in Human Review, and send your changes back to the task's worker. Can be your review surface in place of Lavish and the preview helper.",
+	"author": { "name": "Chris Owen", "url": "https://github.com/chrisjowen" },
+	"repository": "https://github.com/chrisjowen/human-review-wheelhouse",
+	"license": "MIT",
+	"keywords": ["review", "editing", "comments", "feedback", "preview"],
+	"wheelhouse": {
+		"apiVersion": 1,
+		"server": "wheelhouse/server/index.js",
+		"ui": "wheelhouse/ui/index.js",
+		"enabledByDefault": false,
+		"capabilities": ["feedback"],
+		"provides": [{ "role": "review.surface" }],
+		"contributions": [
+			{ "id": "edit", "slot": "preview.action" },
+			{ "id": "session", "slot": "task.section" }
+		],
+		"services": [{ "id": "bridge", "scope": "fleet" }],
+		"settings": {
+			"version": {
+				"title": "Human Review version",
+				"description": "The human-review npm version the plugin installs and runs, such as 0.8.2. Workers take feedback with the same version.",
+				"default": "0.8.2"
+			}
+		}
+	}
+}

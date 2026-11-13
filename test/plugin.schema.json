@@ -1,0 +1,215 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/chrisjowen/wheelhouse/main/packages/plugin-sdk/plugin.schema.json",
+	"title": "Wheelhouse plugin manifest (.wheelhouse-plugin/plugin.json)",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["name", "version", "wheelhouse"],
+	"properties": {
+		"$schema": { "type": "string" },
+		"name": {
+			"description": "The plugin id, also its install directory.",
+			"type": "string",
+			"pattern": "^[a-z][a-z0-9-]{0,39}$"
+		},
+		"displayName": { "type": "string", "maxLength": 400 },
+		"version": {
+			"type": "string",
+			"pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+		},
+		"description": { "type": "string", "maxLength": 400 },
+		"author": {
+			"oneOf": [
+				{ "type": "string", "maxLength": 400 },
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["name"],
+					"properties": {
+						"name": { "type": "string" },
+						"email": { "type": "string" },
+						"url": { "type": "string" }
+					}
+				}
+			]
+		},
+		"repository": { "type": "string", "maxLength": 400 },
+		"homepage": { "type": "string", "maxLength": 400 },
+		"license": { "type": "string", "maxLength": 400 },
+		"keywords": { "type": "array", "items": { "type": "string" } },
+		"wheelhouse": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["apiVersion", "server", "contributions"],
+			"properties": {
+				"apiVersion": { "description": "The plugin contract version.", "const": 1 },
+				"server": {
+					"description": "The ESM server entry, relative to the plugin root.",
+					"type": "string",
+					"pattern": "\\.m?js$"
+				},
+				"ui": {
+					"description": "An ESM bundle that defines the plugin's custom elements.",
+					"type": "string",
+					"pattern": "\\.m?js$"
+				},
+				"enabledByDefault": { "type": "boolean" },
+				"enabledWhenFile": { "type": "string" },
+				"enabledWhenHomeFile": { "type": "string" },
+				"contributions": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "slot"],
+						"properties": {
+							"id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+							"slot": {
+								"enum": [
+									"project.tab",
+									"harbour.card",
+									"task.section",
+									"step.evidence",
+									"bridge.card",
+									"home.card",
+									"header.indicator",
+									"nav.page",
+									"preview.action"
+								]
+							},
+							"icon": {
+								"description": "A nav.page only: its icon in the menu, an image file inside the plugin. An SVG is drawn in the menu's own ink; a PNG, WebP or ICO in its own colours.",
+								"type": "string",
+								"pattern": "\\.([Ss][Vv][Gg]|[Pp][Nn][Gg]|[Ww][Ee][Bb][Pp]|[Ii][Cc][Oo])$"
+							}
+						},
+						"if": { "not": { "properties": { "slot": { "const": "nav.page" } } } },
+						"then": { "not": { "required": ["icon"] } }
+					}
+				},
+				"services": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "scope"],
+						"properties": {
+							"id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+							"scope": { "enum": ["fleet", "project"] }
+						}
+					}
+				},
+				"settings": {
+					"description": "What the plugin needs to know, by key: `wheelhouse plugin install` asks for each and keeps the answers in the plugin's settings (ctx.settings), and the plugin's page in Wheelhouse's Settings changes them.",
+					"type": "object",
+					"maxProperties": 20,
+					"propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$" },
+					"additionalProperties": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"title": {
+								"description": "What the question calls it.",
+								"type": "string",
+								"maxLength": 400
+							},
+							"description": { "type": "string", "maxLength": 400 },
+							"type": {
+								"description": "`list` is a list of short texts, entered separated by commas.",
+								"enum": ["text", "number", "boolean", "list"],
+								"default": "text"
+							},
+							"required": { "type": "boolean", "default": false },
+							"default": {
+								"description": "Offered as the answer; must be of the setting's type (a list of texts for a list, one of the options when it has them).",
+								"type": ["string", "number", "boolean", "array"],
+								"items": { "type": "string", "minLength": 1, "maxLength": 400 },
+								"maxItems": 50
+							},
+							"options": {
+								"description": "A text setting that is one of these values, each with what pages call it.",
+								"type": "array",
+								"minItems": 1,
+								"maxItems": 20,
+								"items": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": ["value"],
+									"properties": {
+										"value": { "type": "string", "minLength": 1, "maxLength": 400 },
+										"label": { "type": "string", "minLength": 1, "maxLength": 400 }
+									}
+								}
+							}
+						}
+					}
+				},
+				"mcpServers": {
+					"type": "array",
+					"description": "MCP servers whose apps the plugin draws, each served by one of its services.",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "service"],
+						"properties": {
+							"id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+							"service": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" }
+						}
+					}
+				},
+				"addressRewrites": {
+					"type": "array",
+					"description": "While the plugin is on, Wheelhouse shows every http address on 127.0.0.1 or localhost at this host template (the first one, if several plugins have one), on the viewer's own Wheelhouse port.",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "to"],
+						"properties": {
+							"id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+							"to": {
+								"type": "string",
+								"maxLength": 100,
+								"pattern": "^[a-z0-9-]*\\{port\\}[a-z0-9-]*(\\.[a-z0-9-]+)*\\.localhost$",
+								"description": "A host template, such as {port}.localhost."
+							}
+						}
+					}
+				},
+				"hostRoutes": {
+					"type": "array",
+					"description": "*.localhost host templates whose requests, while the plugin is on, go to the server entry's host route of the same id.",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "host"],
+						"properties": {
+							"id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+							"host": {
+								"type": "string",
+								"maxLength": 100,
+								"pattern": "^[a-z0-9-]*\\{port\\}[a-z0-9-]*(\\.[a-z0-9-]+)*\\.localhost$",
+								"description": "A host template, such as {port}.localhost."
+							}
+						}
+					}
+				},
+				"capabilities": {
+					"type": "array",
+					"description": "What the plugin may do beyond reading, shown before it is installed. feedback: its elements may send Firstmate a feedback list about one task (host.sendFeedback), each on the captain's click.",
+					"uniqueItems": true,
+					"items": { "enum": ["feedback"] }
+				},
+				"provides": {
+					"type": "array",
+					"description": "Parts of Wheelhouse the plugin can take over, shown before it is installed; each only once the captain chooses it in Settings -> Plugins, one plugin per role. review.surface: while it is on, it replaces Lavish and Wheelhouse's preview helper; Wheelhouse hides its own helper and board links, draws the plugin's preview.action as the primary button (preview.primary), and tells Firstmate to use it instead of Lavish.",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["role"],
+						"properties": { "role": { "enum": ["review.surface"] } }
+					}
+				}
+			}
+		}
+	}
+}
