@@ -12,6 +12,9 @@ import { canonicalTarget, liveServer, readState, targetKey, targetStatus } from 
 import { BRIDGE_SERVICE, packageDir } from './paths.mjs';
 import { bridgeKey, readBridge, readTargets } from './records.mjs';
 
+/** At most this many targets are read at once (the newest pages win in the fleet's list). */
+const MAX_TARGETS = 40;
+
 /** The bridge's record when it answers as itself, else null. */
 export async function liveBridge(state) {
 	const b = readBridge(state);
@@ -43,16 +46,12 @@ const safeCanonical = (t) => {
 	}
 };
 
-/** The task a Human Review page belongs to, from the plugin's records and where the file is. */
-function taskOf(page, record, { task, worktree }) {
-	if (record?.task) return record.task;
-	if (!task) return null;
-	if (page?.kind === 'file' && page.file) {
-		if (worktree && inside(page.file, worktree)) return task.id;
-		// Firstmate keeps a task's own material under <home>/data/<task>/.
-		if (page.file.split(path.sep).join('/').includes(`/data/${task.id}/`)) return task.id;
-	}
-	return null;
+/** Whether a Human Review file page is the task's: in its worktree, or its Firstmate data folder. */
+function isTaskFile(page, { task, worktree }) {
+	if (page?.kind !== 'file' || !page.file) return false;
+	if (worktree && inside(page.file, worktree)) return true;
+	// Firstmate keeps a task's own material under <home>/data/<task>/.
+	return page.file.split(path.sep).join('/').includes(`/data/${task.id}/`);
 }
 
 /**
@@ -113,7 +112,7 @@ export async function status({ state, hrState, version, task = null, worktree = 
 		if (task.preview) add(task.preview);
 		for (const [k, r] of Object.entries(records)) if (r.task === task.id) add(r.target ?? k);
 		for (const page of Object.values(saved.pages)) {
-			if (taskOf(page, null, { task, worktree }) === task.id) add(page.url ?? page.file);
+			if (isTaskFile(page, { task, worktree })) add(page.file);
 		}
 	} else {
 		// The fleet: everything with a record, feedback waiting or in hand, or a localhost page.
@@ -122,29 +121,29 @@ export async function status({ state, hrState, version, task = null, worktree = 
 			const page = saved.pages[k];
 			if (b?.batch && page) add(page.url ?? page.file);
 		}
-		for (const page of Object.values(saved.pages)) if (page.kind === 'url') add(page.url);
+		const recent = Object.values(saved.pages)
+			.filter((p) => p.kind === 'url')
+			.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+		for (const page of recent) add(page.url);
 	}
 
-	const targets = [];
-	for (const [k, { target, kind }] of [...chosen.entries()].slice(0, 100)) {
-		const page = saved.pages[k] ?? null;
-		const record = records[k] ?? null;
-		const live = server ? await targetStatus(server, target) : null;
-		const v = view({
-			key: k,
-			target,
-			kind,
-			page,
-			record:
-				task && !record?.task
-					? { ...record, task: taskOf(page, record, { task, worktree }) }
-					: record,
-			batch: saved.batches[k] ?? null,
-			live,
-			version
-		});
-		targets.push(v);
-	}
+	// Everything chosen for a task is that task's (its preview included); a
+	// record naming another task keeps it.
+	const owned = (record) => (task && !record?.task ? { ...record, task: task.id } : record);
+	const targets = await Promise.all(
+		[...chosen.entries()].slice(0, MAX_TARGETS).map(async ([k, { target, kind }]) =>
+			view({
+				key: k,
+				target,
+				kind,
+				page: saved.pages[k] ?? null,
+				record: owned(records[k] ?? null),
+				batch: saved.batches[k] ?? null,
+				live: server ? await targetStatus(server, target) : null,
+				version
+			})
+		)
+	);
 	// Feedback waiting first, then in hand, then the rest by name.
 	const rank = (t) => (t.waiting ? 0 : t.working ? 1 : t.reviewOpen ? 2 : 3);
 	targets.sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
