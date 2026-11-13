@@ -390,6 +390,32 @@ describe('<human-review-task>', () => {
 		assert.equal(host.calls.filter((c) => c[0] === 'sendFeedback').length, 1);
 	});
 
+	it('turns Send off on the same preview while the section is forwarding it', async () => {
+		let settle;
+		let sends = 0;
+		const host = {
+			...fakeHost(),
+			sendFeedback: () => (sends++, new Promise((r) => (settle = r)))
+		};
+		const edit = mount('human-review-edit', {
+			host,
+			preview: { url: PREVIEW, taskId: 'lumen-pricing' },
+			d: data({ targets: [waiting()] })
+		});
+		const section = mount('human-review-task', {
+			host,
+			d: data({ task: t, targets: [waiting()] })
+		});
+		$(section, '[data-human-review-forward]').click();
+		assert.equal($(edit, '[data-human-review-forward]').disabled, true);
+		edit.forward(waiting(), 'lumen-pricing');
+		assert.equal(sends, 1);
+		settle({ ok: false, error: 'Firstmate is not reachable.' });
+		await tick();
+		await tick();
+		assert.equal($(edit, '[data-human-review-forward]').disabled, false);
+	});
+
 	it('turns Send off in the section while the bridge is down', () => {
 		const el = mount('human-review-task', {
 			d: data({ task: t, bridge: null, targets: [waiting()] })

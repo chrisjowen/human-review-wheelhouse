@@ -87,6 +87,8 @@ const NO_BRIDGE = 'The bridge to the worker is not running; Edit with Human Revi
 
 /** Batches the bridge has noted as forwarded from this page, until the providers read it back. */
 const noted = new Set();
+/** Batches being forwarded from this page right now, so no element offers Send for them. */
+const inFlight = new Set();
 const NOTED_EVENT = 'human-review-forwarded';
 const notedKey = (t) => `${t.target}\n${t.sentAt}`;
 
@@ -208,15 +210,18 @@ class HumanReviewElement extends HTMLElement {
 	forward(t, task) {
 		const d = this.#data;
 		const host = this.#host;
-		if (!host?.sendFeedback || !t.feedback || !d?.bridge) return;
+		const k = notedKey(t);
+		if (!host?.sendFeedback || !t.feedback || !d?.bridge || inFlight.has(k)) return;
 		const to = t.task ?? task;
 		const sending = host.sendFeedback({
 			task: to,
 			subject: t.feedback.subject,
 			items: t.feedback.items
 		});
+		inFlight.add(k);
 		this.busy = true;
 		this.message = null;
+		document.dispatchEvent(new Event(NOTED_EVENT));
 		this.render();
 		Promise.resolve(sending)
 			.then(async (r) => {
@@ -235,16 +240,22 @@ class HumanReviewElement extends HTMLElement {
 						? `Sent to Firstmate for ${to}’s worker; Wheelhouse is still confirming it.`
 						: `Sent to Firstmate, to pass to ${to}’s worker.`
 				};
-				noted.add(notedKey(t));
-				document.dispatchEvent(new Event(NOTED_EVENT));
+				noted.add(k);
 			})
 			.catch((e) => {
 				this.message = { text: e instanceof Error ? e.message : String(e), error: true };
 			})
 			.finally(() => {
+				inFlight.delete(k);
 				this.busy = false;
+				document.dispatchEvent(new Event(NOTED_EVENT));
 				this.render();
 			});
+	}
+
+	/** Whether this batch is being forwarded from this page right now. */
+	isSending(t) {
+		return inFlight.has(notedKey(t));
 	}
 
 	isForwarded(t) {
@@ -301,7 +312,7 @@ class EditButton extends HumanReviewElement {
 			!!p.primary,
 			!!d.bridge,
 			this.service?.url ?? null,
-			t && [t.task, t.waiting, t.working, t.sentAt, forwarded, t.counts],
+			t && [t.task, t.waiting, t.working, t.sentAt, forwarded, this.isSending(t), t.counts],
 			this.busy,
 			this.message
 		]);
@@ -325,7 +336,7 @@ class EditButton extends HumanReviewElement {
 				this.forward(t, p.taskId)
 			);
 			f.dataset.humanReviewForward = '';
-			f.disabled = this.busy || !d.bridge;
+			f.disabled = this.busy || this.isSending(t) || !d.bridge;
 			f.title = d.bridge
 				? `Your Send in Human Review is waiting: send it to ${t.task ?? p.taskId}’s worker, through Firstmate.`
 				: NO_BRIDGE;
@@ -368,6 +379,7 @@ class TaskSection extends HumanReviewElement {
 				t.listening,
 				t.sentAt,
 				this.isForwarded(t),
+				this.isSending(t),
 				t.unsent,
 				t.counts
 			]),
@@ -484,7 +496,7 @@ class TaskSection extends HumanReviewElement {
 		actions.append(edit);
 		if (t.waiting && !forwarded) {
 			const f = button('Send to the worker', 'primary', () => this.forward(t, task.id));
-			f.disabled = this.busy || !t.feedback || !bridge;
+			f.disabled = this.busy || this.isSending(t) || !t.feedback || !bridge;
 			f.dataset.humanReviewForward = '';
 			if (!bridge) f.title = NO_BRIDGE;
 			actions.append(f);
