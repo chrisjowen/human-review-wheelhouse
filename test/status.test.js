@@ -25,11 +25,9 @@ for (const d of [path.join(home, 'data', 'lumen-pricing'), path.join(worktree, '
 
 const plan = path.join(worktree, 'docs', 'plan.md');
 const brief = path.join(home, 'data', 'lumen-pricing', 'brief.html');
-const elsewhere = path.join(home, 'data', 'other-task', 'notes.html');
-fs.mkdirSync(path.dirname(elsewhere), { recursive: true });
-for (const f of [plan, brief, elsewhere]) fs.writeFileSync(f, '# x\n');
+for (const f of [plan, brief]) fs.writeFileSync(f, '# x\n');
 const preview = 'http://localhost:5173/pricing';
-const offered = 'http://127.0.0.1:4000/admin';
+const opened = 'http://127.0.0.1:4000/admin';
 
 const filePage = (file, comments = 0) => ({
 	key: targetKey(file),
@@ -59,9 +57,8 @@ fs.writeFileSync(
 	path.join(hrState, 'state.json'),
 	JSON.stringify({
 		pages: {
-			[targetKey(plan)]: filePage(plan),
-			[targetKey(brief)]: filePage(brief, 2),
-			[targetKey(elsewhere)]: filePage(elsewhere),
+			[targetKey(plan)]: filePage(plan, 2),
+			[targetKey(brief)]: filePage(brief),
 			[targetKey(preview)]: {
 				key: targetKey(preview),
 				kind: 'url',
@@ -73,10 +70,11 @@ fs.writeFileSync(
 		batches: { [targetKey(plan)]: batch }
 	})
 );
-recordTarget(state, targetKey(offered), { target: offered, kind: 'url', task: 'lumen-pricing' });
+// A review the captain opened from the task.
+recordTarget(state, targetKey(opened), { target: opened, kind: 'url', task: 'lumen-pricing' });
 
 describe('status', () => {
-	it('finds a task’s preview, its worktree’s files, its data folder and what was offered to it', async () => {
+	it('finds a task’s preview, its worktree’s files and the reviews opened from it', async () => {
 		const v = await status({
 			state,
 			hrState,
@@ -90,7 +88,7 @@ describe('status', () => {
 		assert.deepEqual(
 			v.targets.map((t) => t.target),
 			// Feedback waiting first, then by name.
-			[plan, brief, 'http://127.0.0.1:4000/admin', 'http://localhost:5173/pricing']
+			[plan, 'http://127.0.0.1:4000/admin', 'http://localhost:5173/pricing']
 		);
 		const [p] = v.targets;
 		assert.equal(p.task, 'lumen-pricing');
@@ -98,43 +96,56 @@ describe('status', () => {
 		assert.equal(p.reviewOpen, false);
 		assert.equal(p.label, 'plan.md');
 		assert.match(p.feedback.items[0].text, /human-review@0\.8\.2 poll .*plan\.md/);
-		assert.deepEqual(v.targets[1].unsent, { comments: 2, edits: 0 });
+		assert.deepEqual(p.unsent, { comments: 2, edits: 0 });
+		assert.ok(!v.targets.some((t) => t.target === brief), 'a data/<task>/ file is not the task’s');
 	});
 
 	it('leaves out worktree files when not run in the worktree', async () => {
 		const v = await status({ state, hrState, version: '0.8.2', task: { id: 'lumen-pricing' } });
 		assert.ok(!v.targets.some((t) => t.target === plan));
-		assert.ok(v.targets.some((t) => t.target === brief));
+		assert.ok(v.targets.some((t) => t.target === opened));
 	});
 
 	it('lists the fleet’s localhost pages and every target with a batch or a record', async () => {
 		const v = await status({ state, hrState, version: '0.8.2' });
-		assert.deepEqual(v.targets.map((t) => t.target).sort(), [plan, offered, preview].sort());
+		assert.deepEqual(v.targets.map((t) => t.target).sort(), [plan, opened, preview].sort());
 	});
 
-	it('offers a page to a task from the command line', async () => {
-		let out = '';
-		const write = process.stdout.write;
-		process.stdout.write = (s) => ((out += s), true);
-		try {
-			await main(['offer', elsewhere, '--task', 'other-task', '--state', state]);
-		} finally {
-			process.stdout.write = write;
+	it('keeps a batch and the newest page in the fleet’s list past its cap of 40', async () => {
+		const many = path.join(dir, 'many');
+		const manyHr = path.join(dir, 'many-hr');
+		fs.mkdirSync(many, { recursive: true });
+		fs.mkdirSync(manyHr, { recursive: true });
+		const old = {};
+		for (let i = 0; i < 45; i++) {
+			const t = `http://localhost:${6000 + i}/`;
+			old[targetKey(t)] = { target: t, kind: 'url', updatedAt: '2026-01-01T00:00:00.000Z' };
 		}
-		assert.match(out, /Offered .*notes\.html to other-task/);
-		assert.match(out, /npx -y human-review@0\.8\.2 poll /);
-		const v = await status({ state, hrState, version: '0.8.2', task: { id: 'other-task' } });
-		assert.deepEqual(
-			v.targets.map((t) => [t.target, t.task]),
-			[[elsewhere, 'other-task']]
+		fs.writeFileSync(path.join(many, 'targets.json'), JSON.stringify({ targets: old }));
+		const fresh = 'http://localhost:7000/new';
+		const sent = 'http://localhost:7001/sent';
+		const urlPage = (url) => ({ key: targetKey(url), kind: 'url', url, comments: [], edits: [] });
+		fs.writeFileSync(
+			path.join(manyHr, 'state.json'),
+			JSON.stringify({
+				pages: {
+					[targetKey(fresh)]: { ...urlPage(fresh), updatedAt: Date.parse('2026-11-13T09:00:00Z') },
+					[targetKey(sent)]: { ...urlPage(sent), updatedAt: Date.parse('2025-01-01T00:00:00Z') }
+				},
+				batches: { [targetKey(sent)]: { ...batch, batch: { ...batch.batch, pages: [] } } }
+			})
 		);
+		const v = await status({ state: many, hrState: manyHr, version: '0.8.2' });
+		assert.equal(v.targets.length, 40);
+		const listed = v.targets.map((t) => t.target);
+		assert.equal(listed[0], sent);
+		assert.ok(listed.includes(fresh));
+	});
+
+	it('has no offer command', async () => {
 		await assert.rejects(
-			main(['offer', elsewhere, '--task', 'bad id', '--state', state]),
-			/task id/
-		);
-		await assert.rejects(
-			main(['offer', 'https://example.com/', '--task', 'x', '--state', state]),
-			/this computer only/
+			main(['offer', plan, '--task', 'lumen-pricing', '--state', state]),
+			/Unknown command offer/
 		);
 	});
 });

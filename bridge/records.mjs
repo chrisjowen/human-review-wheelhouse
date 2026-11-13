@@ -5,8 +5,7 @@
  *   every request to the bridge, so another web page cannot open reviews.
  * - `bridge.json`: where the running bridge listens, and its pid.
  * - `targets.json`: which task each review target belongs to (opened from a
- *   task's preview or section, or offered to a task by Firstmate or a worker),
- *   and when its waiting feedback was last forwarded to that task's worker.
+ *   task's preview or section), and when its waiting feedback was last forwarded to that task's worker.
  */
 
 import { randomBytes } from 'node:crypto';

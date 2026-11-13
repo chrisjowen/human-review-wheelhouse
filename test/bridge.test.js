@@ -15,6 +15,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { targetKey as theirKey } from 'human-review/src/paths.js';
 import { canonicalTarget, readServer, targetKey } from '../bridge/hr.mjs';
+import { readTargets } from '../bridge/records.mjs';
 import { serve } from '../bridge/serve.mjs';
 import { status } from '../bridge/status.mjs';
 
@@ -113,6 +114,13 @@ describe('the bridge with Human Review', () => {
 		assert.equal(readServer(hrState), null, 'Human Review was not started');
 	});
 
+	it('asks for a page when none is named', async () => {
+		const r = await get(`${base}/open?target=%20&key=${key}`);
+		assert.equal(r.status, 400);
+		assert.match(r.body, /Name a page to review/);
+		assert.equal(readServer(hrState), null, 'Human Review was not started');
+	});
+
 	it('refuses an address Human Review cannot review', async () => {
 		const r = await get(
 			`${base}/open?target=${encodeURIComponent('https://example.com/')}&key=${key}`
@@ -124,7 +132,7 @@ describe('the bridge with Human Review', () => {
 	let session;
 	it('starts Human Review and sends the tab to a new review of the preview', async () => {
 		const r = await get(
-			`${base}/open?target=${encodeURIComponent(appUrl)}&task=lumen-pricing&title=Pricing&key=${key}`
+			`${base}/open?target=${encodeURIComponent(appUrl)}&task=lumen-pricing&key=${key}`
 		);
 		assert.equal(r.status, 302, r.body);
 		const s = readServer(hrState);
@@ -150,7 +158,6 @@ describe('the bridge with Human Review', () => {
 		const [t] = v.targets;
 		assert.equal(t.target, appUrl);
 		assert.equal(t.task, 'lumen-pricing');
-		assert.equal(t.title, 'Pricing');
 		assert.equal(t.reviewOpen, true);
 		assert.equal(t.waiting, false);
 		assert.equal(t.feedback, null);
@@ -181,6 +188,13 @@ describe('the bridge with Human Review', () => {
 		const body = JSON.stringify({ target: appUrl, sentAt: '2999-01-01T00:00:00.000Z' });
 		const no = await fetch(`${base}/forwarded`, { method: 'POST', body });
 		assert.equal(no.status, 403);
+		const blank = await fetch(`${base}/forwarded`, {
+			method: 'POST',
+			headers: { 'x-human-review-bridge-key': key, 'content-type': 'application/json' },
+			body: JSON.stringify({ sentAt: '2999-01-01T00:00:00.000Z' })
+		});
+		assert.equal(blank.status, 400);
+		assert.deepEqual(Object.keys(readTargets(state)), [targetKey(appUrl)]);
 		const v0 = await status({ state, hrState, version: VERSION, task: { id: 'lumen-pricing' } });
 		const r = await fetch(`${base}/forwarded`, {
 			method: 'POST',

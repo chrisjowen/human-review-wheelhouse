@@ -13,8 +13,9 @@
  * says so instead.
  *
  * Send to the worker forwards feedback the captain sent with no worker
- * listening, with `host.sendFeedback` called first thing in the click, so it is
- * the captain's own click that sends it.
+ * listening, to the task the review was opened for, with `host.sendFeedback`
+ * called first thing in the click, so it is the captain's own click that sends
+ * it. The bridge notes the forward, so Send is off while the bridge is down.
  *
  * Every value from a review is set as text, never as HTML.
  */
@@ -35,11 +36,10 @@ export function reviewable(url) {
 }
 
 /** The bridge address that opens a review of `target` and sends the tab there. */
-export function openHref(base, { key, target, task, title }) {
+export function openHref(base, { key, target, task }) {
 	const u = new URL('open', base);
 	u.searchParams.set('target', target);
 	if (task) u.searchParams.set('task', task);
-	if (title) u.searchParams.set('title', title);
 	u.searchParams.set('key', key);
 	return u.href;
 }
@@ -83,6 +83,8 @@ function button(text, cls, onClick) {
 	return b;
 }
 
+const NO_BRIDGE = 'The bridge to the worker is not running; Edit with Human Review starts it.';
+
 const REMOTE =
 	'Human Review opens on the computer that runs Wheelhouse. Open Wheelhouse there to edit with it; to review from another device, use Shared review.';
 
@@ -98,8 +100,8 @@ class HumanReviewElement extends HTMLElement {
 	service = null;
 	busy = false;
 	message = null;
-	/** Batches this element forwarded (by target and sent time), until the provider says so too. */
-	forwarded = new Set();
+	/** Batches whose forward the bridge noted from this element, until the provider reads it back. */
+	noted = new Set();
 	/** What the last render drew: Wheelhouse sets `data` again often, and a redraw would swallow a click. */
 	drawn = null;
 
@@ -152,7 +154,7 @@ class HumanReviewElement extends HTMLElement {
 	 * bridge up the tab opens at once; with it down, Wheelhouse launches it and
 	 * then opens the tab.
 	 */
-	openReview({ target, task, title }) {
+	openReview({ target, task }) {
 		const d = this.#data;
 		if (!d) return;
 		if (!onThisComputer()) {
@@ -161,17 +163,13 @@ class HumanReviewElement extends HTMLElement {
 			return;
 		}
 		if (d.bridge) {
-			window.open(
-				openHref(d.bridge.url, { key: d.key, target, task, title }),
-				'_blank',
-				'noopener'
-			);
+			window.open(openHref(d.bridge.url, { key: d.key, target, task }), '_blank', 'noopener');
 			this.message = null;
 			this.render();
 			return;
 		}
 		const base = this.service?.url;
-		const open = base ? openHref(base, { key: d.key, target, task, title }) : undefined;
+		const open = base ? openHref(base, { key: d.key, target, task }) : undefined;
 		this.busy = true;
 		this.message = { text: `Starting Human Review ${d.version}…`, launched: true };
 		this.render();
@@ -193,15 +191,16 @@ class HumanReviewElement extends HTMLElement {
 	}
 
 	/**
-	 * Send a waiting batch to the task's worker, through Firstmate. The send is
-	 * the first thing the click does, so the browser still counts the click.
+	 * Send a waiting batch to the worker of the task it was opened for (else
+	 * `task`), through Firstmate, and have the bridge note it. The send is the
+	 * first thing the click does, so the browser still counts the click.
 	 */
 	forward(t, task) {
 		const d = this.#data;
 		const host = this.#host;
-		if (!host?.sendFeedback || !t.feedback) return;
+		if (!host?.sendFeedback || !t.feedback || !d?.bridge) return;
 		const sending = host.sendFeedback({
-			task,
+			task: t.task ?? task,
 			subject: t.feedback.subject,
 			items: t.feedback.items
 		});
@@ -211,19 +210,21 @@ class HumanReviewElement extends HTMLElement {
 		Promise.resolve(sending)
 			.then(async (r) => {
 				if (!r?.ok) throw new Error(r?.error ?? 'Wheelhouse did not send it.');
-				this.forwarded.add(`${t.target}\n${t.sentAt}`);
+				const noted = await fetch(new URL('forwarded', d.bridge.url), {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', 'x-human-review-bridge-key': d.key },
+					body: JSON.stringify({ target: t.target, sentAt: t.sentAt })
+				}).catch((e) => ({ ok: false, error: e }));
+				if (!noted.ok) {
+					const why = noted.error?.message ?? `it answered ${noted.status}`;
+					throw new Error(`Sent to Firstmate, but the bridge could not note it (${why}).`);
+				}
+				this.noted.add(`${t.target}\n${t.sentAt}`);
 				this.message = {
 					text: r.pending
 						? 'Sent to Firstmate for the worker; Wheelhouse is still confirming it.'
 						: 'Sent to Firstmate, to pass to this task’s worker.'
 				};
-				if (d?.bridge) {
-					await fetch(new URL('forwarded', d.bridge.url), {
-						method: 'POST',
-						headers: { 'content-type': 'application/json', 'x-human-review-bridge-key': d.key },
-						body: JSON.stringify({ target: t.target, sentAt: t.sentAt })
-					}).catch(() => {});
-				}
 			})
 			.catch((e) => {
 				this.message = { text: e instanceof Error ? e.message : String(e), error: true };
@@ -235,7 +236,7 @@ class HumanReviewElement extends HTMLElement {
 	}
 
 	isForwarded(t) {
-		return !!t.forwardedAt || this.forwarded.has(`${t.target}\n${t.sentAt}`);
+		return !!t.forwardedAt || this.noted.has(`${t.target}\n${t.sentAt}`);
 	}
 
 	messageEl() {
@@ -288,7 +289,7 @@ class EditButton extends HumanReviewElement {
 			!!p.primary,
 			!!d.bridge,
 			this.service?.url ?? null,
-			t && [t.waiting, t.working, t.sentAt, forwarded, t.counts],
+			t && [t.task, t.waiting, t.working, t.sentAt, forwarded, t.counts],
 			this.busy,
 			this.message
 		]);
@@ -297,7 +298,7 @@ class EditButton extends HumanReviewElement {
 		const wrap = h('span', 'edit');
 		const ok = reviewable(p.url);
 		const b = button('Edit with Human Review', p.primary ? 'primary' : '', () =>
-			this.openReview({ target: p.url, task: p.taskId ?? null, title: p.title ?? null })
+			this.openReview({ target: p.url, task: p.taskId ?? null })
 		);
 		b.dataset.humanReviewEdit = '';
 		b.disabled = this.busy || !ok;
@@ -312,10 +313,12 @@ class EditButton extends HumanReviewElement {
 				this.forward(t, p.taskId)
 			);
 			f.dataset.humanReviewForward = '';
-			f.disabled = this.busy;
-			f.title =
-				'Your Send in Human Review is waiting: send it to this task’s worker, through Firstmate.';
+			f.disabled = this.busy || !d.bridge;
+			f.title = d.bridge
+				? `Your Send in Human Review is waiting: send it to ${t.task ?? p.taskId}’s worker, through Firstmate.`
+				: NO_BRIDGE;
 			wrap.append(f);
+			if (!d.bridge) wrap.append(h('span', 'muted', NO_BRIDGE));
 		} else if (t?.waiting && forwarded) {
 			wrap.append(h('span', 'chip', 'Sent to the worker'));
 		} else if (t?.working) {
@@ -395,13 +398,13 @@ class TaskSection extends HumanReviewElement {
 
 		const more = h('details');
 		more.append(h('summary', null, 'For Firstmate and workers'));
-		const offer = h('p');
-		offer.append(
-			'Show a page or a Markdown or HTML file here for the captain to edit: ',
-			h('code', null, `node ${d.cli} offer <file-or-url> --task ${d.task.id}`)
+		const check = h('p');
+		check.append(
+			'This task’s reviews: ',
+			h('code', null, `node ${d.cli} status --task ${d.task.id}`)
 		);
 		more.append(
-			offer,
+			check,
 			h(
 				'p',
 				'muted',
@@ -413,13 +416,13 @@ class TaskSection extends HumanReviewElement {
 	}
 
 	card(t, task) {
+		const bridge = !!this.data?.bridge;
 		const card = h('div', 'card');
 		const top = h('div', 'head');
-		const name = h('span', 'name', t.title ?? t.label);
+		const name = h('span', 'name', t.label);
 		name.title = t.target;
 		top.append(name, h('span', 'chip', t.kind === 'url' ? 'Live app' : 'File'));
 		card.append(top);
-		if (t.title) card.append(h('span', 'muted small target', t.target));
 
 		const forwarded = this.isForwarded(t);
 		const unsent = (t.unsent?.comments ?? 0) + (t.unsent?.edits ?? 0);
@@ -462,18 +465,20 @@ class TaskSection extends HumanReviewElement {
 		const actions = h('div', 'row');
 		const ok = t.kind === 'file' || reviewable(t.target);
 		const edit = button('Edit with Human Review', t.waiting && !forwarded ? '' : 'primary', () =>
-			this.openReview({ target: t.target, task: task.id, title: t.title })
+			this.openReview({ target: t.target, task: task.id })
 		);
 		edit.disabled = this.busy || !ok;
 		edit.dataset.humanReviewEdit = '';
 		actions.append(edit);
 		if (t.waiting && !forwarded) {
 			const f = button('Send to the worker', 'primary', () => this.forward(t, task.id));
-			f.disabled = this.busy || !t.feedback;
+			f.disabled = this.busy || !t.feedback || !bridge;
 			f.dataset.humanReviewForward = '';
+			if (!bridge) f.title = NO_BRIDGE;
 			actions.append(f);
 		}
 		card.append(actions);
+		if (t.waiting && !forwarded && !bridge) card.append(h('span', 'muted small', NO_BRIDGE));
 
 		if ((t.waiting || t.working) && t.feedback) {
 			const what = h('details');

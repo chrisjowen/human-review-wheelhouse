@@ -47,7 +47,9 @@ state folder.
    the batch at once. Otherwise Human Review keeps it, and shows "Sent — agent is not listening".
    The task's Human Review section and the preview then show **Send to the worker**.
 4. **Send to the worker** sends Firstmate one feedback list about the task, on your click, through
-   Wheelhouse's `feedback` capability. Firstmate passes it to that task's worker. The list gives
+   Wheelhouse's `feedback` capability. Firstmate passes it to the worker of the task the review
+   was opened for. Send needs the bridge running, because the bridge notes the forward so the same
+   batch is never offered twice; **Edit with Human Review** starts it. The list gives
    the gist (one line per comment and edit) and starts with the exact command that hands the
    worker the full batch:
 
@@ -90,16 +92,10 @@ you show the captain:
 - **A running app:** report its preview as usual (`preview <url>`, a `localhost` or `127.0.0.1`
   address). The captain opens it with **Edit with Human Review**. Their feedback arrives as a
   note about your task.
-- **An HTML or Markdown page** (a plan, a report, a design): write it in the task's worktree or
-  under `data/<task>/` in the Firstmate home. Then offer it to the task, so it shows in the task's
-  Human Review section:
-
-  ```sh
-  node ~/.wheelhouse/plugins/human-review/bridge/main.mjs offer /abs/path/to/plan.html --task <task-id>
-  ```
-
-  (The section's **For Firstmate and workers** fold shows the exact path to `main.mjs`; it is
-  under `$WHEELHOUSE_PLUGINS_DIR` when that is set.)
+- **An HTML or Markdown page** (a plan, a report, a design): write it in the task's worktree and
+  serve it on a `localhost` address reported as the task's preview, so the captain opens it with
+  **Edit with Human Review**. Files in the task's worktree that Human Review has reviewed also show
+  in the task's Human Review section.
 
 - **When the note arrives:** run the command it names, `npx -y human-review@<version> poll
 <target>`, from your worktree. It prints the batch as JSON. Apply it as its `next_step` and
@@ -108,7 +104,9 @@ you show the captain:
   to receive the captain's next Send. Stop when it prints `{"status":"closed"}`.
 - Do not open reviews yourself with `npx human-review <target>`. That opens a browser on this
   computer, and the session ends after 60 seconds when no tab connects.
-- To check a task's reviews: `node …/bridge/main.mjs status --task <task-id>`.
+- To check a task's reviews: `node …/bridge/main.mjs status --task <task-id>`. (The section's
+  **For Firstmate and workers** fold shows the exact path to `main.mjs`; it is under
+  `$WHEELHOUSE_PLUGINS_DIR` when that is set.)
 
 ## Settings
 

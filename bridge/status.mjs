@@ -12,7 +12,7 @@ import { canonicalTarget, liveServer, readState, targetKey, targetStatus } from 
 import { BRIDGE_SERVICE, packageDir } from './paths.mjs';
 import { bridgeKey, readBridge, readTargets } from './records.mjs';
 
-/** At most this many targets are read at once (the newest pages win in the fleet's list). */
+/** At most this many targets are read at once: those with a batch first, then the newest. */
 const MAX_TARGETS = 40;
 
 /** The bridge's record when it answers as itself, else null. */
@@ -46,13 +46,12 @@ const safeCanonical = (t) => {
 	}
 };
 
-/** Whether a Human Review file page is the task's: in its worktree, or its Firstmate data folder. */
-function isTaskFile(page, { task, worktree }) {
-	if (page?.kind !== 'file' || !page.file) return false;
-	if (worktree && inside(page.file, worktree)) return true;
-	// Firstmate keeps a task's own material under <home>/data/<task>/.
-	return page.file.split(path.sep).join('/').includes(`/data/${task.id}/`);
-}
+/** Whether a Human Review file page is the task's: in its worktree. */
+const isTaskFile = (page, worktree) =>
+	page?.kind === 'file' && !!page.file && !!worktree && inside(page.file, worktree);
+
+/** A record's ISO `updatedAt` or a page's epoch milliseconds, as milliseconds. */
+const when = (v) => (typeof v === 'number' ? v : Date.parse(v ?? '') || 0);
 
 /**
  * One target's view. `live` is Human Review's own status answer when its
@@ -75,7 +74,6 @@ function view({ key, target, kind, page, record, batch, live, version }) {
 		kind,
 		label: pageLabel(kind === 'url' ? { kind, url: target } : { kind, file: target }),
 		task: record?.task ?? null,
-		title: record?.title ?? null,
 		reviewOpen: !!live?.review_open,
 		listening: !!live?.agent_listening,
 		// Sent by the captain and not yet taken by anyone: what "Send to the worker" forwards.
@@ -100,38 +98,43 @@ export async function status({ state, hrState, version, task = null, worktree = 
 	const saved = readState(hrState);
 	const records = readTargets(state);
 
-	/** @type {Map<string, { target: string, kind: string }>} */
+	/** @type {Map<string, { target: string, kind: string, time: number }>} */
 	const chosen = new Map();
-	const add = (t) => {
+	const add = (t, time) => {
 		const c = safeCanonical(t);
 		if (!c) return;
 		const k = targetKey(c.value);
-		if (!chosen.has(k)) chosen.set(k, { target: c.value, kind: c.kind });
+		const had = chosen.get(k);
+		if (had) had.time = Math.max(had.time, time);
+		else chosen.set(k, { target: c.value, kind: c.kind, time });
 	};
 	if (task) {
-		if (task.preview) add(task.preview);
-		for (const [k, r] of Object.entries(records)) if (r.task === task.id) add(r.target ?? k);
+		if (task.preview) add(task.preview, Infinity);
+		for (const [k, r] of Object.entries(records))
+			if (r.task === task.id) add(r.target ?? k, when(r.updatedAt));
 		for (const page of Object.values(saved.pages)) {
-			if (isTaskFile(page, { task, worktree })) add(page.file);
+			if (isTaskFile(page, worktree)) add(page.file, when(page.updatedAt));
 		}
 	} else {
 		// The fleet: everything with a record, feedback waiting or in hand, or a localhost page.
-		for (const r of Object.values(records)) if (r.target) add(r.target);
+		for (const r of Object.values(records)) if (r.target) add(r.target, when(r.updatedAt));
 		for (const [k, b] of Object.entries(saved.batches)) {
 			const page = saved.pages[k];
-			if (b?.batch && page) add(page.url ?? page.file);
+			if (b?.batch && page) add(page.url ?? page.file, when(page.updatedAt));
 		}
-		const recent = Object.values(saved.pages)
-			.filter((p) => p.kind === 'url')
-			.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-		for (const page of recent) add(page.url);
+		for (const page of Object.values(saved.pages))
+			if (page.kind === 'url') add(page.url, when(page.updatedAt));
 	}
+	const hasBatch = (k) => (saved.batches[k]?.batch ? 0 : 1);
+	const kept = [...chosen.entries()]
+		.sort(([ka, a], [kb, b]) => hasBatch(ka) - hasBatch(kb) || b.time - a.time)
+		.slice(0, MAX_TARGETS);
 
 	// Everything chosen for a task is that task's (its preview included); a
 	// record naming another task keeps it.
 	const owned = (record) => (task && !record?.task ? { ...record, task: task.id } : record);
 	const targets = await Promise.all(
-		[...chosen.entries()].slice(0, MAX_TARGETS).map(async ([k, { target, kind }]) =>
+		kept.map(async ([k, { target, kind }]) =>
 			view({
 				key: k,
 				target,

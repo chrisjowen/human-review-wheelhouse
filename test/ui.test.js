@@ -31,7 +31,6 @@ const target = (over = {}) => ({
 	kind: 'url',
 	label: PREVIEW,
 	task: 'lumen-pricing',
-	title: null,
 	reviewOpen: true,
 	listening: false,
 	waiting: false,
@@ -115,13 +114,10 @@ beforeEach(() => {
 
 describe('helpers', () => {
 	it('builds the bridge address that opens a review', () => {
-		const href = new URL(
-			ui.openHref(BRIDGE, { key: KEY, target: PREVIEW, task: 'lumen-pricing', title: 'Pricing' })
-		);
+		const href = new URL(ui.openHref(BRIDGE, { key: KEY, target: PREVIEW, task: 'lumen-pricing' }));
 		assert.equal(href.origin + href.pathname, `${BRIDGE}open`);
 		assert.equal(href.searchParams.get('target'), PREVIEW);
 		assert.equal(href.searchParams.get('task'), 'lumen-pricing');
-		assert.equal(href.searchParams.get('title'), 'Pricing');
 		assert.equal(href.searchParams.get('key'), KEY);
 	});
 
@@ -245,6 +241,51 @@ describe('<human-review-edit>', () => {
 		assert.ok($(el, '[data-human-review-forward]'));
 	});
 
+	it('sends to the task the review was opened for, not the preview’s', () => {
+		const host = fakeHost();
+		const el = mount('human-review-edit', {
+			host,
+			preview: preview({ taskId: 'lumen-hero' }),
+			d: data({ targets: [waiting({ task: 'lumen-pricing' })] })
+		});
+		$(el, '[data-human-review-forward]').click();
+		assert.equal(host.calls.at(-1)[0], 'sendFeedback');
+		assert.equal(host.calls.at(-1)[1].task, 'lumen-pricing');
+	});
+
+	it('turns Send off and says why while the bridge is down', async () => {
+		const host = fakeHost();
+		const el = mount('human-review-edit', {
+			host,
+			preview: preview(),
+			d: data({ bridge: null, targets: [waiting()] })
+		});
+		const f = $(el, '[data-human-review-forward]');
+		assert.equal(f.disabled, true);
+		assert.match(el.shadowRoot.textContent, /bridge to the worker is not running/);
+		el.forward(waiting(), 'lumen-pricing');
+		await tick();
+		assert.ok(!host.calls.some((c) => c[0] === 'sendFeedback'));
+	});
+
+	it('does not count a forward the bridge refused, and says so', async () => {
+		globalThis.fetch = async (url, init) => {
+			opened.push(['fetch', String(url), init]);
+			return { ok: false, status: 500, json: async () => ({ error: 'disk full' }) };
+		};
+		const el = mount('human-review-edit', {
+			preview: preview(),
+			d: data({ targets: [waiting()] })
+		});
+		$(el, '[data-human-review-forward]').click();
+		await tick();
+		await tick();
+		await tick();
+		assert.match($(el, '[role=alert]').textContent, /bridge could not note it \(it answered 500\)/);
+		assert.ok($(el, '[data-human-review-forward]'), 'still offered');
+		assert.ok(!$$(el, '.chip').some((c) => c.textContent === 'Sent to the worker'));
+	});
+
 	it('has no forward for a preview no task reported', () => {
 		const el = mount('human-review-edit', {
 			preview: preview({ taskId: null }),
@@ -294,10 +335,7 @@ describe('<human-review-task>', () => {
 			cards[2].querySelector('[data-human-review-edit]').textContent,
 			'Edit with Human Review'
 		);
-		assert.match(
-			el.shadowRoot.textContent,
-			/bridge\/main\.mjs offer <file-or-url> --task lumen-pricing/
-		);
+		assert.match(el.shadowRoot.textContent, /bridge\/main\.mjs status --task lumen-pricing/);
 	});
 
 	it('forwards from the section with the task’s own id', () => {
@@ -306,6 +344,24 @@ describe('<human-review-task>', () => {
 		$(el, '[data-human-review-forward]').click();
 		assert.equal(host.calls.at(-1)[0], 'sendFeedback');
 		assert.equal(host.calls.at(-1)[1].task, 'lumen-pricing');
+	});
+
+	it('forwards a target another task opened to that task’s worker', () => {
+		const host = fakeHost();
+		const el = mount('human-review-task', {
+			host,
+			d: data({ task: t, targets: [waiting({ task: 'lumen-hero' })] })
+		});
+		$(el, '[data-human-review-forward]').click();
+		assert.equal(host.calls.at(-1)[1].task, 'lumen-hero');
+	});
+
+	it('turns Send off in the section while the bridge is down', () => {
+		const el = mount('human-review-task', {
+			d: data({ task: t, bridge: null, targets: [waiting()] })
+		});
+		assert.equal($(el, '[data-human-review-forward]').disabled, true);
+		assert.match($(el, '.card').textContent, /bridge to the worker is not running/);
 	});
 
 	it('opens a file review for the task', () => {

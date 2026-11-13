@@ -5,7 +5,6 @@
  *
  *   node main.mjs serve --port <n>                 the bridge (Wheelhouse launches it)
  *   node main.mjs install                           install the Human Review version the bridge runs
- *   node main.mjs offer <file-or-url> --task <id>   show a page in that task's Human Review section
  *   node main.mjs status [--task <id>] [--json]     review targets, their state and waiting feedback
  *                       [--preview <url>] [--in-worktree]   (the task's preview; files under this folder count as the task's)
  *
@@ -18,8 +17,6 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pollCommand } from './feedback.mjs';
-import { canonicalTarget, targetKey } from './hr.mjs';
 import {
 	DEFAULT_VERSION,
 	VERSION_RE,
@@ -28,8 +25,7 @@ import {
 	packageDir,
 	stateDir
 } from './paths.mjs';
-import { recordTarget } from './records.mjs';
-import { serve, TASK_ID } from './serve.mjs';
+import { serve } from './serve.mjs';
 import { status } from './status.mjs';
 
 const FLAGS = new Set(['json', 'help', 'in-worktree']);
@@ -61,7 +57,7 @@ export class Usage extends Error {}
 const HELP = fs
 	.readFileSync(fileURLToPath(import.meta.url), 'utf8')
 	.split('\n')
-	.slice(2, 16)
+	.slice(2, 15)
 	.map((l) => l.replace(/^ \*\/?\s?/, ''))
 	.join('\n')
 	.trim();
@@ -158,25 +154,6 @@ export async function main(argv, env = process.env) {
 	}
 
 	if (cmd === 'install') return print(install(state, version));
-
-	if (cmd === 'offer') {
-		const input = rest[0];
-		if (!input) throw new Usage('Name a file or a localhost address to offer.');
-		const task = opts.task;
-		if (!task || !TASK_ID.test(task)) throw new Usage('--task needs the task id.');
-		const t = canonicalTarget(input);
-		if (t.kind === 'file' && !fs.existsSync(t.value)) throw new Usage(`No such file: ${t.value}`);
-		recordTarget(state, targetKey(t.value), {
-			target: t.value,
-			kind: t.kind,
-			task,
-			...(opts.title ? { title: String(opts.title).slice(0, 200) } : {}),
-			offeredAt: new Date().toISOString()
-		});
-		return print(
-			`Offered ${t.value} to ${task}: the captain opens it with Edit with Human Review in the task's Human Review section. Their feedback comes back as a note about the task; take it with:\n  ${pollCommand(t.value, version)}`
-		);
-	}
 
 	if (cmd === 'status') {
 		const task = opts.task ? { id: opts.task, preview: opts.preview ?? null } : null;

@@ -126,23 +126,21 @@ export function serve({ port, state, hrState, pkg, version, pluginVersion }) {
 				const task = url.searchParams.get('task') || null;
 				if (task && !TASK_ID.test(task))
 					return page(res, 400, 'Cannot open this review', 'That is not a task id.');
+				const raw = (url.searchParams.get('target') ?? '').trim();
+				if (!raw) return page(res, 400, 'Cannot open this review', 'Name a page to review.');
 				let target;
 				try {
-					target = canonicalTarget(url.searchParams.get('target') ?? '');
+					target = canonicalTarget(raw);
 				} catch (e) {
 					return page(res, 400, 'Cannot open this review', e.message);
 				}
-				if (!target.value)
-					return page(res, 400, 'Cannot open this review', 'Name a page to review.');
 				try {
 					const hr = await ensureServer(hrState, pkg);
 					const opened = await openSession(hr, target.value);
-					const title = (url.searchParams.get('title') ?? '').slice(0, 200) || null;
 					recordTarget(state, targetKey(target.value), {
 						target: target.value,
 						kind: target.kind,
 						...(task ? { task } : {}),
-						...(title ? { title } : {}),
 						openedAt: new Date().toISOString()
 					});
 					res.writeHead(302, { location: opened.url, 'cache-control': 'no-store' });
@@ -161,10 +159,11 @@ export function serve({ port, state, hrState, pkg, version, pluginVersion }) {
 				if (!same(req.headers['x-human-review-bridge-key'], key))
 					return json(res, 403, { error: 'missing or wrong key' }, cors);
 				const body = await readBody(req);
-				const target = canonicalTarget(body.target ?? '');
+				const raw = typeof body.target === 'string' ? body.target.trim() : '';
 				const sentAt = typeof body.sentAt === 'string' ? body.sentAt.slice(0, 40) : null;
-				if (!target.value || !sentAt)
+				if (!raw || !sentAt)
 					return json(res, 400, { error: 'name the target and its sentAt' }, cors);
+				const target = canonicalTarget(raw);
 				recordTarget(state, targetKey(target.value), {
 					target: target.value,
 					kind: target.kind,
