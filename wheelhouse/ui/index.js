@@ -85,6 +85,11 @@ function button(text, cls, onClick) {
 
 const NO_BRIDGE = 'The bridge to the worker is not running; Edit with Human Review starts it.';
 
+/** Batches the bridge has noted as forwarded from this page, until the providers read it back. */
+const noted = new Set();
+const NOTED_EVENT = 'human-review-forwarded';
+const notedKey = (t) => `${t.target}\n${t.sentAt}`;
+
 const REMOTE =
 	'Human Review opens on the computer that runs Wheelhouse. Open Wheelhouse there to edit with it; to review from another device, use Shared review.';
 
@@ -100,8 +105,6 @@ class HumanReviewElement extends HTMLElement {
 	service = null;
 	busy = false;
 	message = null;
-	/** Batches whose forward the bridge noted from this element, until the provider reads it back. */
-	noted = new Set();
 	/** What the last render drew: Wheelhouse sets `data` again often, and a redraw would swallow a click. */
 	drawn = null;
 
@@ -133,8 +136,15 @@ class HumanReviewElement extends HTMLElement {
 		return this.#data;
 	}
 
+	#onNoted = () => this.render();
+
 	connectedCallback() {
+		document.addEventListener(NOTED_EVENT, this.#onNoted);
 		this.render();
+	}
+
+	disconnectedCallback() {
+		document.removeEventListener(NOTED_EVENT, this.#onNoted);
 	}
 
 	refreshService() {
@@ -199,8 +209,9 @@ class HumanReviewElement extends HTMLElement {
 		const d = this.#data;
 		const host = this.#host;
 		if (!host?.sendFeedback || !t.feedback || !d?.bridge) return;
+		const to = t.task ?? task;
 		const sending = host.sendFeedback({
-			task: t.task ?? task,
+			task: to,
 			subject: t.feedback.subject,
 			items: t.feedback.items
 		});
@@ -210,21 +221,22 @@ class HumanReviewElement extends HTMLElement {
 		Promise.resolve(sending)
 			.then(async (r) => {
 				if (!r?.ok) throw new Error(r?.error ?? 'Wheelhouse did not send it.');
-				const noted = await fetch(new URL('forwarded', d.bridge.url), {
+				const reply = await fetch(new URL('forwarded', d.bridge.url), {
 					method: 'POST',
 					headers: { 'content-type': 'application/json', 'x-human-review-bridge-key': d.key },
 					body: JSON.stringify({ target: t.target, sentAt: t.sentAt })
 				}).catch((e) => ({ ok: false, error: e }));
-				if (!noted.ok) {
-					const why = noted.error?.message ?? `it answered ${noted.status}`;
+				if (!reply.ok) {
+					const why = reply.error?.message ?? `it answered ${reply.status}`;
 					throw new Error(`Sent to Firstmate, but the bridge could not note it (${why}).`);
 				}
-				this.noted.add(`${t.target}\n${t.sentAt}`);
 				this.message = {
 					text: r.pending
-						? 'Sent to Firstmate for the worker; Wheelhouse is still confirming it.'
-						: 'Sent to Firstmate, to pass to this task’s worker.'
+						? `Sent to Firstmate for ${to}’s worker; Wheelhouse is still confirming it.`
+						: `Sent to Firstmate, to pass to ${to}’s worker.`
 				};
+				noted.add(notedKey(t));
+				document.dispatchEvent(new Event(NOTED_EVENT));
 			})
 			.catch((e) => {
 				this.message = { text: e instanceof Error ? e.message : String(e), error: true };
@@ -236,7 +248,7 @@ class HumanReviewElement extends HTMLElement {
 	}
 
 	isForwarded(t) {
-		return !!t.forwardedAt || this.noted.has(`${t.target}\n${t.sentAt}`);
+		return !!t.forwardedAt || noted.has(notedKey(t));
 	}
 
 	messageEl() {

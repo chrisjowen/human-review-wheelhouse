@@ -6,7 +6,15 @@ const window = new Window({ url: 'http://127.0.0.1:4310/tasks/lumen-pricing' });
 let ui;
 
 before(async () => {
-	for (const k of ['window', 'document', 'HTMLElement', 'customElements', 'Node', 'location']) {
+	for (const k of [
+		'window',
+		'document',
+		'HTMLElement',
+		'customElements',
+		'Node',
+		'Event',
+		'location'
+	]) {
 		globalThis[k] = k === 'window' ? window : window[k];
 	}
 	ui = await import('../wheelhouse/ui/index.js');
@@ -43,10 +51,13 @@ const target = (over = {}) => ({
 	feedback: null,
 	...over
 });
+/** Each test's Send has its own time: a forward noted on the page outlives the test. */
+let sent = 0;
+let SENT_AT;
 const waiting = (over = {}) =>
 	target({
 		waiting: true,
-		sentAt: '2026-11-13T10:00:00.000Z',
+		sentAt: SENT_AT,
 		counts: { comments: 1, edits: 2, note: false },
 		feedback,
 		...over
@@ -100,6 +111,7 @@ const $$ = (el, sel) => [...el.shadowRoot.querySelectorAll(sel)];
 
 let opened;
 beforeEach(() => {
+	SENT_AT = new Date(Date.UTC(2026, 10, 13, 10, 0, sent++)).toISOString();
 	document.body.replaceChildren();
 	opened = [];
 	window.open = (...a) => {
@@ -222,7 +234,7 @@ describe('<human-review-edit>', () => {
 		const note = opened.find((o) => o[0] === 'fetch');
 		assert.equal(note[1], `${BRIDGE}forwarded`);
 		assert.equal(note[2].headers['x-human-review-bridge-key'], KEY);
-		assert.equal(JSON.parse(note[2].body).sentAt, '2026-11-13T10:00:00.000Z');
+		assert.equal(JSON.parse(note[2].body).sentAt, SENT_AT);
 		assert.equal($(el, '[data-human-review-forward]'), null);
 		assert.ok($$(el, '.chip').some((c) => c.textContent === 'Sent to the worker'));
 	});
@@ -356,6 +368,28 @@ describe('<human-review-task>', () => {
 		assert.equal(host.calls.at(-1)[1].task, 'lumen-hero');
 	});
 
+	it('stops offering Send on the same preview once the section forwards it', async () => {
+		const host = fakeHost();
+		const edit = mount('human-review-edit', {
+			host,
+			preview: { url: PREVIEW, taskId: 'lumen-pricing' },
+			d: data({ targets: [waiting()] })
+		});
+		const section = mount('human-review-task', {
+			host,
+			d: data({ task: t, targets: [waiting()] })
+		});
+		assert.ok($(edit, '[data-human-review-forward]'));
+		$(section, '[data-human-review-forward]').click();
+		await tick();
+		await tick();
+		await tick();
+		assert.match($(section, '[role=status]').textContent, /lumen-pricing’s worker/);
+		assert.equal($(edit, '[data-human-review-forward]'), null);
+		assert.ok($$(edit, '.chip').some((c) => c.textContent === 'Sent to the worker'));
+		assert.equal(host.calls.filter((c) => c[0] === 'sendFeedback').length, 1);
+	});
+
 	it('turns Send off in the section while the bridge is down', () => {
 		const el = mount('human-review-task', {
 			d: data({ task: t, bridge: null, targets: [waiting()] })
@@ -379,7 +413,7 @@ describe('<human-review-task>', () => {
 
 	it('marks a forwarded batch as sent', () => {
 		const el = mount('human-review-task', {
-			d: data({ task: t, targets: [waiting({ forwardedAt: '2026-11-13T10:00:00.000Z' })] })
+			d: data({ task: t, targets: [waiting({ forwardedAt: SENT_AT })] })
 		});
 		assert.equal($(el, '[data-human-review-forward]'), null);
 		assert.match($(el, '.card').textContent, /Sent to the worker/);
